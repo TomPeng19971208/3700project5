@@ -13,7 +13,6 @@ replica_ids = sys.argv[2:]
 #sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 #sock.connect(my_id)
 
-last = 0
 
 class Server:
     def __init__(self,self_id,replica_ids, socket):
@@ -25,12 +24,12 @@ class Server:
         #role can be one of "1.follower, 2.candidate, 3.leader"
         self.role = 1
         self.leader_id = 'FFFF'
-        #candidate timeout (1.5~3s)
+        #candidate timeout (150-300ms)
         self.candidate_timeout = random.randrange(150, 300)/100
         #timeout of waiting for heartbeat from leader
-        self.leader_timeout = 0.015
+        self.leader_timeout = 0.25
         #interval of sending heartbeat
-        self.heartbeat_interval = 0.01
+        self.heartbeat_interval = 0.1
         # current term 
         self.current_term = 0
         #last action's time
@@ -38,30 +37,39 @@ class Server:
         #whether self have voted in this term 
         self.voted = False
         self.vote_received = 1
+      
+        self.sock.connect(self_id)
         
     
     def getVote(self):
         if self.leader_id == 'FFFF': 
             #broadcast get_vote message to all replicas
             msg = {'src': self.id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'get_vote', 'term': self.current_term}
-            self.sock.send(json.dumps(msg))
-            print '%s sending a get_vote to %s' % (msg['src'], msg['dst'])
+            self.send_msg(msg)
             self.current_term += 1
         else:
             return
         
     #when broad cast, set dst to 'FFFF'
     def send_msg(self, msg):
-        self.sock.send(json.dump(msg))
-        
+        if msg['dst']=='FFFF':
+           for r in self.replicas: 
+              msg['dst']=r
+              print("sendto\n")
+              self.sock.send(json.dumps(msg))
+        else:
+           self.sock.send(json.dumps(msg))
+           print(msg)       
+ 
     def reset_timeouts(self):
         self.last_action_time = time.time()
-        self.candidate_timeout = random.randrange(150, 300)/100
+        self.candidate_timeout = random.randrange(15, 30)/100
         
     
     def handle_recv(self, msg):
         msg_type = msg['type']
         if msg_type == 'get_vote':
+            exit(1)
             if not self.voted and msg['term'] <= self.current_term:
                 resp = {'src': self.id, 'dst': msg['src'], 'type': 'send_vote'}
                 self.send_msg(resp)
@@ -90,34 +98,36 @@ class Server:
         
         
     def start(self):
-        self.sock.connect(self.id)
+        #self.sock.connect(self.id)
         while True:
             ready = select.select([self.sock], [], [], 0.1)[0]
             if self.sock in ready:
-                msg_raw = sock.recv(32768)
+                msg_raw = self.sock.recv(32768)
                 if len(msg_raw) == 0: continue
                 msg = json.loads(msg_raw)
                 self.handle_recv(msg)
         #end of receiving msgs---------
             clock = time.time()
             time_passed = clock-self.last_action_time
+            #print(time_passed)
+            #print(self.candidate_timeout)
+            #print("\n")
             #send a heartbeat if self is the leader
             if time_passed > self.heartbeat_interval and self.role==3:
 		       msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'noop'}
 		       self.send_msg(msg)
 		       self.last_action_time = clock
+            #become a candidate after candidate timeout
+            elif time_passed > self.candidate_timeout and not self.role == 3 and self.leader_id=='FFFF':
+                self.role = 2
+                print("becoming leader")
+                self.getVote()
+                self.last_action_time = clock
             #re-elect if self has not received hearbeats from leader
             elif time_passed > self.leader_timeout and not self.role==3: 
                 self.leader_id='FFFF'
                 self.voted = False
                 self.reset_timeouts()
-            #become a candidate after candidate timeout
-            elif time_passed > self.candidate_timeout and self.role == 2 and self.leader=='FFFF':
-                self.role = 2
-                self.getVote()
-                self.last_action_time = clock
-        
-    def send(dest_id, msg):
         
         
 def main():
