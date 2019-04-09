@@ -10,33 +10,106 @@ replica_ids = sys.argv[2:]
 
 # Connect to the network. All messages to/from other replicas and clients will
 # occur over this socket
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-sock.connect(my_id)
+#sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+#sock.connect(my_id)
 
 last = 0
 
-while True:
-	ready = select.select([sock], [], [], 0.1)[0]
-	
-	if sock in ready:
-		msg_raw = sock.recv(32768)
-		
-		if len(msg_raw) == 0: continue
-		msg = json.loads(msg_raw)
-		
-		# For now, ignore get() and put() from clients
-		if msg['type'] in ['get', 'put']:
+class Server:
+    def __init__(self,self_id,replica_ids, socket):
+        self.id = self_id
+        self.replicas = replica_ids
+        self.sock = socket
+        #key-value pair
+        self.store = {}
+        #role can be one of "1.follower, 2.candidate, 3.leader"
+        self.role = 1
+        self.leader_id = 'FFFF'
+        #candidate timeout (1.5~3s)
+        self.candidate_timeout = random.randrange(150, 300)/100
+        #timeout of waiting for heartbeat from leader
+        self.leader_timeout = 0.015
+        #interval of sending heartbeat
+        self.heartbeat_interval = 0.01
+        # current term 
+        self.current_term = 0
+        #last action's time
+        self.last_action_time = time.time()
+        #whether self have voted in this term 
+        self.voted = False
+        self.vote_received = 1
+        
+    
+    def getVote(self):
+        if self.leader_id == 'FFFF': 
+            #broadcast get_vote message to all replicas
+            msg = {'src': self.id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'get_vote', 'term': self.current_term}
+            self.sock.send(json.dumps(msg))
+            print '%s sending a NOOP to %s' % (msg['src'], msg['dst'])
+            self.current_term += 1
+        else:
+            return
+        
+    #when broad cast, set dst to 'FFFF'
+    def send_msg(self, msg):
+        self.sock.send(json.dump(msg))
+    
+    def handle_recv(self, msg):
+        msg_type = msg['type']
+        if msg_type == 'get_vote':
+            if not self.voted and msg['term'] == self.current_term:
+                resp = {'src': self.id, 'dst': msg['src'], 'type': 'send_vote', 'term': self.current_term}
+                self.send_msg(resp)
+                self.leader_id = msg['src']
+                
+                
+        
+        
+        
+    def start(self):
+        self.sock.connect(self.id)
+        while True:
+            ready = select.select([sock], [], [], 0.1)[0]
+            if self.sock in ready:
+                msg_raw = sock.recv(32768)
+                if len(msg_raw) == 0: continue
+                msg = json.loads(msg_raw)
+                if msg['type'] in ['get', 'put']:
                         pass
-		
-		# Handle noop messages. This may be removed from your final implementation
-		elif msg['type'] == 'noop':
-			print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
-		
-	clock = time.time()
-	if clock-last > 2:
+                elif msg['type'] == 'noop':
+			       print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
+            clock = time.time()
+            if clock-last > 2:
 		# Send a no-op message to a random peer every two seconds, just for fun
 		# You definitely want to remove this from your implementation
-		msg = {'src': my_id, 'dst': random.choice(replica_ids), 'leader': 'FFFF', 'type': 'noop'}
-		sock.send(json.dumps(msg))
-		print '%s sending a NOOP to %s' % (msg['src'], msg['dst'])
-		last = clock
+		       msg = {'src': my_id, 'dst': random.choice(replica_ids), 'leader': 'FFFF', 'type': 'noop'}
+		       sock.send(json.dumps(msg))
+		       print '%s sending a NOOP to %s' % (msg['src'], msg['dst'])
+		       last = clock
+                
+        
+    def send(dest_id, msg):
+        
+        
+def main():
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    server = Server(sys.argv[1], sys.argv[2:], sock)
+    server.start()
+
+if __name__=="__main__":
+    main()      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
