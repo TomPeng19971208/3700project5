@@ -2,153 +2,149 @@
 
 import sys, socket, select, time, json, random
 
+#key-value pair
+store = {}
+#role can be one of "1.followilrer, 2.candidate, 3.leader"
+role = 1
+leader_id = 'FFFF'
+#candidate timeout (1.5~3s)
+candidate_timeout = random.randrange(15, 30)/100
+#timeout of waiting for heartbeat from leader
+leader_timeout = 0.25
+#interval of sending heartbeat
+heartbeat_interval = 0.1
+# current term 
+current_term = 0
+#last action's time
+last_action_time = time.time()
+#whether self have voted in this term 
+voted = False
+vote_received = 1
+
 # Your ID number
 my_id = sys.argv[1]
 
 # The ID numbers of all the other replicas
-replica_ids = sys.argv[2:]
+replicas = sys.argv[2:]
+
+last_action_time=0
 
 # Connect to the network. All messages to/from other replicas and clients will
 # occur over this socket
-#sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-#sock.connect(my_id)
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+sock.connect(my_id)
 
+def send_msg(msg):
+    sock.send(json.dump(msg))
 
-class Server:
-    def __init__(self,self_id,replica_ids, socket):
-        self.id = self_id
-        self.replicas = replica_ids
-        self.sock = socket
-        #key-value pair
-        self.store = {}
-        #role can be one of "1.follower, 2.candidate, 3.leader"
-        self.role = 1
-        self.leader_id = 'FFFF'
-        #candidate timeout (150-300ms)
-        self.candidate_timeout = random.randrange(150, 300)/100
-        #timeout of waiting for heartbeat from leader
-        self.leader_timeout = 0.25
-        #interval of sending heartbeat
-        self.heartbeat_interval = 0.1
-        # current term 
-        self.current_term = 0
-        #last action's time
-        self.last_action_time = time.time()
-        #whether self have voted in this term 
-        self.voted = False
-        self.vote_received = 1
-      
-        self.sock.connect(self_id)
-        
-    
-    def getVote(self):
-        if self.leader_id == 'FFFF': 
-            #broadcast get_vote message to all replicas
-            msg = {'src': self.id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'get_vote', 'term': self.current_term}
-            self.send_msg(msg)
-            self.current_term += 1
-        else:
-            return
+def getVote():
+    global current_term
+    if leader_id == 'FFFF': 
+       #broadcast get_vote message to all replicas
+       msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'get_vote', 'term':current_term}
+       sock.send(json.dumps(msg))
+       #print '%s sending a get_vote to %s' % (msg['src'], msg['dst'])
+       current_term += 1
+    else:
+        return
         
     #when broad cast, set dst to 'FFFF'
-    def send_msg(self, msg):
-        if msg['dst']=='FFFF':
-           for r in self.replicas: 
-              msg['dst']=r
-              print("sendto\n")
-              self.sock.send(json.dumps(msg))
-        else:
-           self.sock.send(json.dumps(msg))
-           print(msg)       
+def send_msg(msg):
+    if msg['dst']=='FFFF':
+       for r in replicas:
+           msg['dst']=r
+           sock.send(json.dumps(msg))
+    else:
+       sock.send(json.dumps(msg))
  
-    def reset_timeouts(self):
-        self.last_action_time = time.time()
-        self.candidate_timeout = random.randrange(15, 30)/100
+def reset_timeouts():
+    global last_action_time
+    global candidate_timeout
+    last_action_time = time.time()
+    candidate_timeout = random.randrange(150, 300)/100
         
     
-    def handle_recv(self, msg):
-        msg_type = msg['type']
-        if msg_type == 'get_vote':
-            exit(1)
-            if not self.voted and msg['term'] <= self.current_term:
-                resp = {'src': self.id, 'dst': msg['src'], 'type': 'send_vote'}
-                self.send_msg(resp)
-                self.voted = True
+def handle_recv(msg):
+    global current_term
+    global voted
+    global last_action_time
+    global vote_received
+    global leader_id
+    global role
+    msg_type = msg['type']
+    if msg_type == 'get_vote':
+        if not voted and msg['term'] <= current_term:
+            print("vote----------\n")
+            resp = {'src': my_id, 'dst': msg['src'], 'type': 'send_vote', 'leader': 'FFFF'}
+            send_msg(resp)
+            voted = True
         #received hearbeat from leader
-        if msg_type == 'noop' and not self.role==3:
-            self.last_action_time = time.time()
+        if msg_type == 'noop' and not role==3:
+            last_action_time = time.time()
         #received a vote from others
         elif msg_type == 'send_vote':
             if self.leader_id=='FFFF':
-                self.vote_received += 1
+                vote_received += 1
+                print(vote_received)
                 #self becomes the leader
-                if(self.vote_received == 3):
-                    self.leader_id = self.id
-                    self.role = 3
-                    self.send_msg({'src': self.id, 'dst': 'FFFF', 'leader': self.id, 'type': 'announce_leader', 'term': self.current_term, 'store': self.store})
+                if(vote_received == 3):
+                    print("send announce leader------\n")
+                    leader_id = my_id
+                    role = 3
+                    send_msg({'src': my_id, 'dst': 'FFFF', 'leader': my_id, 'type': 'announce_leader', 'term': current_term, 'store': store})
                     
-        elif msg_type == 'announce_leader':
-            self.current_term = msg_type['term']
-            self.store = msg['store']
-            self.vote_received = 1
-            self.leader_id = msg['src']
-            self.reset_timeouts()
-                
-        
-        
-        
-    def start(self):
-        #self.sock.connect(self.id)
-        while True:
-            ready = select.select([self.sock], [], [], 0.1)[0]
-            if self.sock in ready:
-                msg_raw = self.sock.recv(32768)
-                if len(msg_raw) == 0: continue
-                msg = json.loads(msg_raw)
-                self.handle_recv(msg)
+        elif msg_type == 'announce_leader' and leader_id=='FFFF':
+            print("received announce_leader")
+            current_term = msg_type['term']
+            store = msg['store']
+            vote_received = 1
+            leader_id = msg['src']
+            reset_timeouts()
+
+while True:
+    global time_passed
+    global last_action_time
+    global role
+    global leader_id
+    global vote
+    ready = select.select([sock], [], [], 0.1)[0]
+    if sock in ready:
+        msg_raw = sock.recv(32768)
+        if len(msg_raw) == 0: continue
+        msg = json.loads(msg_raw)
+        handle_recv(msg)
         #end of receiving msgs---------
-            clock = time.time()
-            time_passed = clock-self.last_action_time
-            #print(time_passed)
-            #print(self.candidate_timeout)
-            #print("\n")
-            #send a heartbeat if self is the leader
-            if time_passed > self.heartbeat_interval and self.role==3:
-		       msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'noop'}
-		       self.send_msg(msg)
-		       self.last_action_time = clock
+        clock = time.time()
+        time_passed = clock-last_action_time
+        #send a heartbeat if self is the leader
+        if time_passed > heartbeat_interval and role==3:
+            msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'noop'}
+            send_msg(msg)
+            last_action_time = clock
             #become a candidate after candidate timeout
-            elif time_passed > self.candidate_timeout and not self.role == 3 and self.leader_id=='FFFF':
-                self.role = 2
-                print("becoming leader")
-                self.getVote()
-                self.last_action_time = clock
-            #re-elect if self has not received hearbeats from leader
-            elif time_passed > self.leader_timeout and not self.role==3: 
-                self.leader_id='FFFF'
-                self.voted = False
-                self.reset_timeouts()
+        elif time_passed > candidate_timeout and not role == 3 and leader_id=='FFFF':
+            role = 2
+            print("becoming leader")
+            getVote()
+            last_action_time = clock
+            #remove leader if self has not received hearbeats from leader
+        elif time_passed > leader_timeout and not role==3: 
+            leader_id='FFFF'
+            voted = False
+            reset_timeouts()
         
         
-def main():
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-    server = Server(sys.argv[1], sys.argv[2:], sock)
-    server.start()
-
-if __name__=="__main__":
-    main()      
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
