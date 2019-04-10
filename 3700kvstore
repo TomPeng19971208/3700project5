@@ -8,7 +8,7 @@ store = {}
 role = 1
 leader_id = 'FFFF'
 #candidate timeout (1.5~3s)
-candidate_timeout = random.randrange(15, 30)/100
+candidate_timeout = random.randrange(150, 300)/100
 #timeout of waiting for heartbeat from leader
 leader_timeout = 0.25
 #interval of sending heartbeat
@@ -34,9 +34,6 @@ last_action_time=0
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 sock.connect(my_id)
 
-def send_msg(msg):
-    sock.send(json.dump(msg))
-
 def getVote():
     global current_term
     if leader_id == 'FFFF': 
@@ -55,6 +52,7 @@ def send_msg(msg):
            msg['dst']=r
            sock.send(json.dumps(msg))
     else:
+       #print(msg)
        sock.send(json.dumps(msg))
  
 def reset_timeouts():
@@ -71,6 +69,7 @@ def handle_recv(msg):
     global vote_received
     global leader_id
     global role
+    global store
     msg_type = msg['type']
     if msg_type == 'get_vote':
         if not voted and msg['term'] <= current_term:
@@ -82,24 +81,25 @@ def handle_recv(msg):
         if msg_type == 'noop' and not role==3:
             last_action_time = time.time()
         #received a vote from others
-        elif msg_type == 'send_vote':
-            if self.leader_id=='FFFF':
-                vote_received += 1
-                print(vote_received)
-                #self becomes the leader
-                if(vote_received == 3):
-                    print("send announce leader------\n")
-                    leader_id = my_id
-                    role = 3
-                    send_msg({'src': my_id, 'dst': 'FFFF', 'leader': my_id, 'type': 'announce_leader', 'term': current_term, 'store': store})
+    elif msg_type == 'send_vote':
+        print("receive vote------\n")
+        if leader_id=='FFFF':
+            vote_received += 1
+            print(vote_received)
+            #self becomes the leader
+            if(vote_received >= 3):
+                print("send announce leader------\n")
+                leader_id = my_id
+                role = 3
+                send_msg({'src': my_id, 'dst': 'FFFF', 'leader': my_id, 'type': 'announce_leader', 'term': current_term, 'store': store})
                     
-        elif msg_type == 'announce_leader' and leader_id=='FFFF':
-            print("received announce_leader")
-            current_term = msg_type['term']
-            store = msg['store']
-            vote_received = 1
-            leader_id = msg['src']
-            reset_timeouts()
+    elif msg_type == 'announce_leader' and leader_id=='FFFF':
+        print("received announce_leader")
+        current_term = msg['term']
+        store = msg['store']
+        vote_received = 1
+        leader_id = msg['src']
+        reset_timeouts()
 
 while True:
     global time_passed
@@ -118,6 +118,8 @@ while True:
         time_passed = clock-last_action_time
         #send a heartbeat if self is the leader
         if time_passed > heartbeat_interval and role==3:
+            print("send heartbeat------")
+            print(my_id)
             msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'noop'}
             send_msg(msg)
             last_action_time = clock
