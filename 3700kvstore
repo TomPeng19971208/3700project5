@@ -20,6 +20,7 @@ last_action_time = time.time()
 #whether self have voted in this term 
 voted = False
 vote_received = 1
+recv_buffer = []
 
 # Your ID number
 my_id = sys.argv[1]
@@ -60,7 +61,62 @@ def reset_timeouts():
     global candidate_timeout
     last_action_time = time.time()
     candidate_timeout = random.randrange(150, 300)/100
-        
+
+#execute all of the messages stored in the buffer
+def clear_buffer():
+    global recv_buffer
+    #self is the leader
+    if role==3:
+        for msg in recv_buffer:
+            handle_recv(msg)
+        recv_buffer=[]
+    else:
+        for msg in recv_buffer:
+            redirect = {"src": msg['dst'], "dst": msg['src'], "leader": leader_id, "type": "redirect", "MID": msg['MID']}
+            send_msg(redirect)
+        recv_buffer = []
+
+def do_get(key, mid):
+    if key in store.keys():
+        return {'type': 'ok', 'MID': store[key]['MID'], 'value': store[key]['value']}
+    else:
+        return {'type': 'ok', 'value': '', 'MID': mid}
+    
+def do_put(key, value, mid):
+    global store
+    if role==3:
+        store[key]={'value': value, 'MID': mid}
+        return {'type': 'ok'}
+    else:
+        return {'type': 'redirect'}
+
+
+def handle_get_put(msg):
+    #print(msg)
+    msg_type = msg['type']
+    #self is the leader
+    if role==3:
+        if msg_type == 'get':
+            resp = do_get(msg['key'], msg['MID'])
+            resp['src']=my_id
+            resp['dst']=msg['src']
+            resp['leader']=leader_id
+            send_msg(resp)
+        if msg_type == 'put':
+            resp = do_put(msg['key'], msg['value'], msg['MID'])
+            resp['src']=my_id
+            resp['dst']=msg['src']
+            resp['leader']=leader_id
+            resp['MID']=msg['MID']
+            print(store)
+            send_msg(resp)
+    else:
+        resp = msg
+        resp['dst']=resp['src']
+        resp['src']=my_id
+        resp['type']='redirect'
+        send_msg(resp)
+    
     
 def handle_recv(msg):
     global current_term
@@ -71,7 +127,9 @@ def handle_recv(msg):
     global role
     global store
     msg_type = msg['type']
-    if msg_type == 'get_vote':
+    if msg_type == 'get' or msg_type=='put' and not leader_id == 'FFFF':
+        handle_get_put(msg)
+    elif msg_type == 'get_vote':
         if not voted and msg['term'] <= current_term:
             print("vote----------\n")
             resp = {'src': my_id, 'dst': msg['src'], 'type': 'send_vote', 'leader': 'FFFF'}
@@ -100,6 +158,7 @@ def handle_recv(msg):
         vote_received = 1
         leader_id = msg['src']
         reset_timeouts()
+        #clear_buffer()
 
 while True:
     global time_passed
@@ -107,11 +166,17 @@ while True:
     global role
     global leader_id
     global vote
+    global recv_buffer
     ready = select.select([sock], [], [], 0.1)[0]
     if sock in ready:
         msg_raw = sock.recv(32768)
         if len(msg_raw) == 0: continue
         msg = json.loads(msg_raw)
+        #if leader is lost or has not been elected, add the msg to a buffer
+        if leader_id=='FFFF':
+            recv_buffer.append(msg)
+        #else:
+        #    clear_buffer()
         handle_recv(msg)
         #end of receiving msgs---------
         clock = time.time()
