@@ -37,9 +37,10 @@ sock.connect(my_id)
 
 def getVote():
     global current_term
+    print("get vote----------"+my_id)
     if leader_id == 'FFFF': 
        #broadcast get_vote message to all replicas
-       msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'get_vote', 'term':current_term}
+       msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'get_vote', 'term':current_term, 'leader': 'FFFF'}
        sock.send(json.dumps(msg))
        #print '%s sending a get_vote to %s' % (msg['src'], msg['dst'])
        current_term += 1
@@ -52,7 +53,15 @@ def send_msg(msg):
        for r in replicas:
            msg['dst']=r
            sock.send(json.dumps(msg))
+       msg['dst']=my_id
+       sock.send(json.dumps(msg))
     else:
+       if 'value' in msg.keys():
+          print("send get --------")
+          print(json.dumps(msg))
+       else:
+          print("send put --------")
+          print(json.dumps(msg))
        #print(msg)
        sock.send(json.dumps(msg))
  
@@ -67,54 +76,62 @@ def clear_buffer():
     global recv_buffer
     #self is the leader
     if role==3:
+        #print(recv_buffer)
         for msg in recv_buffer:
             handle_recv(msg)
         recv_buffer=[]
     else:
+        #print(recv_buffer)
         for msg in recv_buffer:
-            redirect = {"src": msg['dst'], "dst": msg['src'], "leader": leader_id, "type": "redirect", "MID": msg['MID']}
+            redirect = {"src": my_id, "dst": msg['src'], "leader": leader_id, "type": "redirect", "MID": msg['MID']}
             send_msg(redirect)
+            print("redirect to: " + str(leader_id))
         recv_buffer = []
 
 def do_get(key, mid):
     if key in store.keys():
-        return {'type': 'ok', 'MID': store[key]['MID'], 'value': store[key]['value']}
+        return {'type': 'ok', 'MID': mid, 'value': store[key]['value']}
     else:
         return {'type': 'ok', 'value': '', 'MID': mid}
     
 def do_put(key, value, mid):
     global store
-    if role==3:
+    if my_id==leader_id:
         store[key]={'value': value, 'MID': mid}
+        #print(len(store))
         return {'type': 'ok'}
     else:
         return {'type': 'redirect'}
 
 
 def handle_get_put(msg):
-    #print(msg)
     msg_type = msg['type']
     #self is the leader
-    if role==3:
+    if leader_id==my_id:
         if msg_type == 'get':
+            print("get---"+msg['dst']+" "+leader_id)
             resp = do_get(msg['key'], msg['MID'])
             resp['src']=my_id
             resp['dst']=msg['src']
             resp['leader']=leader_id
+            print(resp)
             send_msg(resp)
-        if msg_type == 'put':
+        elif msg_type == 'put':
             resp = do_put(msg['key'], msg['value'], msg['MID'])
             resp['src']=my_id
             resp['dst']=msg['src']
             resp['leader']=leader_id
             resp['MID']=msg['MID']
-            print(store)
+            print("put")
+            print(resp)
             send_msg(resp)
     else:
         resp = msg
         resp['dst']=resp['src']
         resp['src']=my_id
         resp['type']='redirect'
+        resp['leader']=leader_id
+        print("redirect to: "+str(leader_id) + msg_type)
         send_msg(resp)
     
     
@@ -126,41 +143,47 @@ def handle_recv(msg):
     global leader_id
     global role
     global store
+    global recv_buffer
     msg_type = msg['type']
-    if msg_type == 'get' or msg_type=='put' and not leader_id == 'FFFF':
+    if (msg_type == 'get' or msg_type=='put'):
         handle_get_put(msg)
     elif msg_type == 'get_vote':
-        if not voted and msg['term'] <= current_term:
-            print("vote----------\n")
+        if not voted and msg['term'] >= current_term:
+            print("vote----------\n"+my_id+" "+msg['src'])
             resp = {'src': my_id, 'dst': msg['src'], 'type': 'send_vote', 'leader': 'FFFF'}
             send_msg(resp)
             voted = True
         #received hearbeat from leader
-        if msg_type == 'noop' and not role==3:
-            last_action_time = time.time()
+    elif msg_type == 'noop' and not role==3:
+         last_action_time = time.time()
         #received a vote from others
     elif msg_type == 'send_vote':
-        print("receive vote------\n")
+        #print("receive vote------\n")
         if leader_id=='FFFF':
             vote_received += 1
-            print(vote_received)
+            #print(vote_received)
             #self becomes the leader
-            if(vote_received >= 3):
-                print("send announce leader------\n")
-                leader_id = my_id
-                role = 3
-                send_msg({'src': my_id, 'dst': 'FFFF', 'leader': my_id, 'type': 'announce_leader', 'term': current_term, 'store': store})
+            if(vote_received == 3):
+                print("send announce leader------\n" + my_id)
+                #leader_id = my_id
+                send_msg({'src': my_id, 'dst': 'FFFF','type': 'announce_leader', 'term': current_term, 'store': store, 'leader': my_id})
                     
     elif msg_type == 'announce_leader' and leader_id=='FFFF':
         print("received announce_leader")
         current_term = msg['term']
         store = msg['store']
         vote_received = 1
-        leader_id = msg['src']
+        leader_id = msg['leader']
+        if leader_id==my_id:
+           role = 3
+        else:
+           role = 1
         reset_timeouts()
-        #clear_buffer()
+        #print(recv_buffer)
+        clear_buffer()
 
 while True:
+    #print(leader_id)
     global time_passed
     global last_action_time
     global role
@@ -173,33 +196,34 @@ while True:
         if len(msg_raw) == 0: continue
         msg = json.loads(msg_raw)
         #if leader is lost or has not been elected, add the msg to a buffer
-        if leader_id=='FFFF':
+        if leader_id=='FFFF' and (msg['type']=='put' or msg['type']=='get'):
             recv_buffer.append(msg)
         #else:
         #    clear_buffer()
-        handle_recv(msg)
+        else:
+            handle_recv(msg)
         #end of receiving msgs---------
         clock = time.time()
         time_passed = clock-last_action_time
         #send a heartbeat if self is the leader
-        if time_passed > heartbeat_interval and role==3:
-            print("send heartbeat------")
-            print(my_id)
-            msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'noop'}
+        if time_passed > heartbeat_interval and my_id==leader_id:
+            #print("send heartbeat------")
+            #print(my_id)
+            msg = {'src': my_id, 'dst': 'FFFF', 'leader': leader_id, 'type': 'noop'}
             send_msg(msg)
-            last_action_time = clock
+            last_action_time = time.time()
             #become a candidate after candidate timeout
-        elif time_passed > candidate_timeout and not role == 3 and leader_id=='FFFF':
+        elif time_passed > candidate_timeout and (not my_id==leader_id) and leader_id=='FFFF':
             role = 2
-            print("becoming leader")
             getVote()
-            last_action_time = clock
+            last_action_time = time.time()
             #remove leader if self has not received hearbeats from leader
-        elif time_passed > leader_timeout and not role==3: 
+        elif time_passed > leader_timeout and not my_id==leader_id:
+            print("time_passed: "+str(time_passed)+ " " + str(leader_timeout))
             leader_id='FFFF'
             voted = False
             reset_timeouts()
-        
+        last_action_time=time.time()
         
         
         
