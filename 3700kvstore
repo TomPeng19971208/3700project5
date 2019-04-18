@@ -2,6 +2,8 @@
 
 import sys, socket, select, time, json, random
 
+global store, role, leader_id, last_action_time, voted, vote_received, recv_buffer
+
 #---------state machine persistent------
 my_id = sys.argv[1]
 replicas = sys.argv[2:]
@@ -45,8 +47,6 @@ sock.connect(my_id)
 
 
 
-
-
 def getVote():
     global current_term
     #print("get vote----------"+my_id)
@@ -68,13 +68,6 @@ def send_msg(msg):
        msg['dst']=my_id
        sock.send(json.dumps(msg))
     else:
-       if 'value' in msg.keys():
-          print("send get --------")
-          print(json.dumps(msg))
-       else:
-          print("send put --------")
-          print(json.dumps(msg))
-       #print(msg)
        sock.send(json.dumps(msg))
  
 def reset_timeouts():
@@ -97,19 +90,21 @@ def clear_buffer():
         for msg in recv_buffer:
             redirect = {"src": my_id, "dst": msg['src'], "leader": leader_id, "type": "redirect", "MID": msg['MID']}
             send_msg(redirect)
-            print("redirect to: " + str(leader_id))
+            #print("redirect to: " + str(leader_id))
         recv_buffer = []
 
 def do_get(key, mid):
     if key in store.keys():
-        return {'type': 'ok', 'MID': mid, 'value': store[key]['value']}
+        return {'type': 'ok', 'MID': mid, 'value': store[key]}
     else:
         return {'type': 'ok', 'value': '', 'MID': mid}
     
 def do_put(key, value, mid):
     global store
     if my_id==leader_id:
-        store[key]={'value': value, 'MID': mid}
+        store[key]= value
+        log_entry.append({'key': key, 'value':  value, 'term': current_term})
+        # broadcase AppendEntries RPC to all followers
         #print(len(store))
         return {'type': 'ok'}
     else:
@@ -119,14 +114,14 @@ def do_put(key, value, mid):
 def handle_get_put(msg):
     msg_type = msg['type']
     #self is the leader
-    if leader_id==my_id:
+    if leader_id == my_id:
         if msg_type == 'get':
-            print("get---"+msg['dst']+" "+leader_id)
+            #print("get---"+msg['dst']+" "+leader_id)
             resp = do_get(msg['key'], msg['MID'])
             resp['src']=my_id
             resp['dst']=msg['src']
             resp['leader']=leader_id
-            print(resp)
+            #print(resp)
             send_msg(resp)
         elif msg_type == 'put':
             resp = do_put(msg['key'], msg['value'], msg['MID'])
@@ -134,8 +129,8 @@ def handle_get_put(msg):
             resp['dst']=msg['src']
             resp['leader']=leader_id
             resp['MID']=msg['MID']
-            print("put")
-            print(resp)
+            #print("put")
+            #print(resp)
             send_msg(resp)
     else:
         resp = msg
@@ -143,7 +138,7 @@ def handle_get_put(msg):
         resp['src']=my_id
         resp['type']='redirect'
         resp['leader']=leader_id
-        print("redirect to: "+str(leader_id) + msg_type)
+        #print("redirect to: "+str(leader_id) + msg_type)
         send_msg(resp)
     
     
@@ -196,12 +191,7 @@ def handle_recv(msg):
 
 while True:
     #print(leader_id)
-    global time_passed
-    global last_action_time
-    global role
-    global leader_id
-    global vote
-    global recv_buffer
+
     ready = select.select([sock], [], [], 0.1)[0]
     if sock in ready:
         msg_raw = sock.recv(32768)
