@@ -2,42 +2,54 @@
 
 import sys, socket, select, time, json, random
 
+#---------state machine persistent------
+my_id = sys.argv[1]
+replicas = sys.argv[2:]
 #key-value pair
 store = {}
-#role can be one of "1.followilrer, 2.candidate, 3.leader"
-role = 1
-leader_id = 'FFFF'
+recv_buffer = []
+log_entry = []
+
+#--------state machine volatile-----
+next_index={}
+commit_idx = -1;
+
+#--------constant---------
 #candidate timeout (1.5~3s)
 candidate_timeout = random.randrange(150, 300)/100
 #timeout of waiting for heartbeat from leader
 leader_timeout = 0.25
 #interval of sending heartbeat
 heartbeat_interval = 0.1
-# current term 
-current_term = 0
 #last action's time
 last_action_time = time.time()
-#whether self have voted in this term 
+last_action_time=0
+
+
+
+#--------election----------
+#"1-follower, 2-candidate, 3-leader"
+role = 1
 voted = False
 vote_received = 1
-recv_buffer = []
-
-# Your ID number
-my_id = sys.argv[1]
-
-# The ID numbers of all the other replicas
-replicas = sys.argv[2:]
-
-last_action_time=0
+current_term = 0
+leader_id = 'FFFF'
+commit_index = -1
 
 # Connect to the network. All messages to/from other replicas and clients will
 # occur over this socket
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 sock.connect(my_id)
 
+
+
+
+
+
+
 def getVote():
     global current_term
-    print("get vote----------"+my_id)
+    #print("get vote----------"+my_id)
     if leader_id == 'FFFF': 
        #broadcast get_vote message to all replicas
        msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'get_vote', 'term':current_term, 'leader': 'FFFF'}
