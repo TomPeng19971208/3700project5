@@ -22,7 +22,7 @@ last_applied = -1
 
 #--------constant---------
 #candidate timeout (1.5~3s)
-candidate_timeout = random.randrange(15000, 30000)/10000
+candidate_timeout = random.randrange(15000, 30000) / 10000.0000
 #timeout of waiting for heartbeat from leader
 #leader_timeout = 0.25
 #interval of sending heartbeat
@@ -81,7 +81,7 @@ def reset_timeouts():
     global last_action_time
     global candidate_timeout
     last_action_time = time.time()
-    candidate_timeout = random.randrange(15000, 30000)/10000
+    candidate_timeout = random.randrange(15000, 30000) / 10000.0000
 
 #execute all of the messages stored in the buffer
 def clear_buffer():
@@ -158,11 +158,11 @@ def handle_getvote(msg):
     global leader_id
     global role
     global voted
-    #if msg['term'] > current_term:
-    #   leader_id='FFFF'
-    #   role=1
-    #   current_term = msg['term']
-    #   return
+    if msg['term'] > current_term and msg['lastLogIndex'] < len(log_entry)-1:
+       leader_id='FFFF'
+       role=1
+       current_term = msg['term']
+       
     if not voted and msg['term'] >= current_term and leader_id=='FFFF' and msg['lastLogIndex'] >= len(log_entry)-1:
        print("vote----------\n"+my_id+" "+msg['src'])
        resp = {'src': my_id, 'dst': msg['src'], 'type': 'send_vote', 'leader': 'FFFF'}
@@ -253,6 +253,9 @@ def handle_put_success(msg):
     global match_index
     global commit_idx
     global last_applied
+
+    if msg["leader"] != my_id:
+        return
     
     src = msg['src']
     next_index[src]=msg['next_idx']
@@ -261,9 +264,10 @@ def handle_put_success(msg):
     #print("match idx: ", match_index)
     values = match_index.values()
     values.sort()
+    new_commit_idx = 1;
     try:
       new_commit_idx = values[2]
-    except e:
+    except:
       print(values)
     #new_commit_idx = values.sort()[2]
     if new_commit_idx < 0:
@@ -321,7 +325,7 @@ def handle_recv(msg):
 
 
 while True:
-    #print(leader_id)
+    #print("current leader: =" + str(leader_id))
 
     ready = select.select([sock], [], [], 0.1)[0]
     if sock in ready:
@@ -344,7 +348,8 @@ while True:
             send_msg(msg)
             last_action_time = time.time()
         #become a candidate after candidate timeout
-        elif time_passed > candidate_timeout and role != 3 and (not my_id==leader_id) :
+        elif time_passed > candidate_timeout and (not my_id==leader_id):
+            print("time_passed: "+str(time_passed)+ " " + str(candidate_timeout))
             leader_id='FFFF'
             role = 2
             getVote()
