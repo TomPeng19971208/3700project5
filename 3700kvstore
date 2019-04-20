@@ -22,7 +22,7 @@ last_applied = -1
 
 #--------constant---------
 #candidate timeout (0.15~0.3s)
-candidate_timeout = random.randrange(1500, 3000) / 10000.0000
+candidate_timeout = random.randrange(1800, 3000) / 10000.0000
 #interval of sending heartbeat
 heartbeat_interval = 0.1
 #last action's time
@@ -55,7 +55,9 @@ def getVote():
        #broadcast get_vote message to all replicas
        current_term += 1
        voted = True
-       msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'get_vote', 'term':current_term, 'leader': 'FFFF', 'lastLogIndex': len(log_entry)-1}
+       msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF',
+              'type': 'get_vote', 'term':current_term, 'leader': 'FFFF',
+              'lastLogIndex': len(log_entry)-1}
        sock.send(json.dumps(msg))
        #print '%s sending a get_vote to %s' % (msg['src'], msg['dst'])
        
@@ -80,7 +82,7 @@ def reset_timeouts():
     global last_action_time
     global candidate_timeout
     last_action_time = time.time()
-    candidate_timeout = random.randrange(1500, 3000) / 10000.0000
+    candidate_timeout = random.randrange(1800, 3000) / 10000.0000
 
 
 def do_get(key, mid):
@@ -150,7 +152,8 @@ def handle_sendvote(msg):
 def commit_state_machine():
     global commit_idx
     global last_applied
-    global store 
+    global store
+    global log_entry
 
     while(last_applied < commit_idx):
       entry = log_entry[last_applied+1]
@@ -190,9 +193,8 @@ def handle_heartbeat_rpc(msg):
     global commit_idx
     global last_action_time
     
-    if msg['commit_idx'] > commit_idx:
-       commit_idx = min(msg['commit_idx'], len(log_entry)-1)
-    commit_state_machine()
+    if msg['leader_commit'] > commit_idx:
+       commit_idx = min(msg['leader_commit'], len(log_entry)-1)
     last_action_time = time.time()
 
 def handle_appendentry_rpc(msg):
@@ -201,6 +203,7 @@ def handle_appendentry_rpc(msg):
    if my_id==leader_id:
       return
    else:
+      handle_heartbeat_rpc(msg)
       if(len(log_entry)-1 < msg['prelog_idx']):
          resp = {'type': 'check_term', 'src': my_id, 'dst': leader_id, 'leader': leader_id}
          send_msg(resp)
@@ -239,15 +242,20 @@ def handle_check_term(msg):
 def handle_put_success(msg):
     global next_index
     global match_index
-    global commit_idx
-    global last_applied
 
     src = msg['src']
     next_index[src] = msg['next_idx']
     match_index[src] = msg['next_idx']-1
 
-    # If there exists an N such that N > commitIndex, a majority
-    # of matchIndex[i] >= N, and log[N].term == currentTerm: set commitIndex = N
+
+# If there exists an N such that N > commitIndex, a majority
+# of matchIndex[i] >= N, and log[N].term == currentTerm: set commitIndex = N
+def update_leader_commitIndex():
+    global match_index
+    global commit_idx
+    global last_applied
+    global log_entry
+
     values = match_index.values()
     values.sort()
     new_commit_idx = 1
@@ -257,14 +265,13 @@ def handle_put_success(msg):
       print(values)
     if new_commit_idx < 0:
        return
+    
     for i in range(last_applied+1, new_commit_idx + 1):
         target = log_entry[i]
         resp = {'src': my_id, 'dst': target['client'], 'leader': leader_id, 'type': 'ok', 'MID': target['MID']}
         #print("put-------------\n", resp)
         send_msg(resp)
     commit_idx = new_commit_idx
-    commit_state_machine() 
-       
       
 
 def handle_recv(msg):
@@ -329,9 +336,14 @@ while True:
     #after receiving msgs---------
     clock = time.time()
     time_passed = clock - last_action_time
+    commit_state_machine()
+
+    if my_id==leader_id and role == 3:
+        update_leader_commitIndex()
+    
     #send a heartbeat if self is the leader
     if time_passed > heartbeat_interval and my_id==leader_id and role == 3:
-        msg = {'src': my_id, 'dst': 'FFFF', 'leader': leader_id, 'type': 'heartbeat_rpc', 'commit_idx': commit_idx}
+        msg = {'src': my_id, 'dst': 'FFFF', 'leader': leader_id, 'type': 'heartbeat_rpc', 'leader_commit': commit_idx}
         send_msg(msg)
         last_action_time = time.time()
     #become a candidate after candidate timeout
