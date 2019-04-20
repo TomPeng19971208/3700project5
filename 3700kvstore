@@ -156,6 +156,10 @@ def handle_getvote(msg):
     global leader_id
     global role
     global voted
+
+    if msg['src'] == my_id:
+        return
+    
     if msg['term'] > current_term and msg['lastLogIndex'] < len(log_entry)-1:
        print("here------")
        if leader_id == my_id:
@@ -352,12 +356,17 @@ while True:
             send_msg(msg)
             last_action_time = time.time()
         #become a candidate after candidate timeout
-        elif time_passed > candidate_timeout and (not my_id==leader_id):
+        elif time_passed > candidate_timeout and role == 2:
+            role = 1
+            voted = False
+            vote_received = 1
+        elif time_passed > candidate_timeout and role == 1:
             print("time_passed: "+str(time_passed)+ " " + str(candidate_timeout))
             leader_id='FFFF'
             role = 2
             getVote()
             reset_timeouts()
+            
         #remove leader if self has not received hearbeats from leader
         #elif time_passed > leader_timeout and (not my_id==leader_id) and leader_id != 'FFFF':
         #    print("time_passed: "+str(time_passed)+ " " + str(leader_timeout))
