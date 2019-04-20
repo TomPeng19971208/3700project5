@@ -2,7 +2,7 @@
 
 import sys, socket, select, time, json, random
 
-global store, role, leader_id, last_action_time, voted, vote_received, recv_buffer
+global store, role, leader_id, last_action_time, voted, vote_received, recv_buffer, check_rpc
 
 #---------state machine persistent------
 my_id = sys.argv[1]
@@ -16,15 +16,17 @@ log_entry = []
 
 #--------state machine volatile-----
 next_index={}
+# record every changes 
+next_index_changes={}
 match_index={}
 commit_idx = -1
 last_applied = -1
 
 #--------constant---------
 #candidate timeout (0.15~0.3s)
-candidate_timeout = random.randrange(1800, 3000) / 10000.0000
+candidate_timeout = random.randrange(2200, 3000) / 10000.0000
 #interval of sending heartbeat
-heartbeat_interval = 0.1
+heartbeat_interval = 0.2
 #last action's time
 last_action_time = time.time()
 
@@ -82,7 +84,7 @@ def reset_timeouts():
     global last_action_time
     global candidate_timeout
     last_action_time = time.time()
-    candidate_timeout = random.randrange(1800, 3000) / 10000.0000
+    candidate_timeout = random.randrange(2200, 3000) / 10000.0000
 
 
 def do_get(key, mid):
@@ -97,6 +99,8 @@ def do_get(key, mid):
 def handle_get_put(msg):
     global leader_id
     global my_id
+    global log_entry
+    global current_term
     
     msg_type = msg['type']
     #self is the leader
@@ -110,7 +114,11 @@ def handle_get_put(msg):
             send_msg(resp)
         elif msg_type == 'put':
             #print("put------------------", msg)
-            broad_cast_rpc(msg['key'], msg['value'], msg['src'], msg['MID'])
+            #broad_cast_rpc(msg['key'], msg['value'], msg['src'], msg['MID'])
+            # save in leader log entry
+            log_entry.append({'key': msg['key'], 'value':  msg['value'], 'term': current_term,
+                              'client': msg['src'], 'MID': msg['MID']})
+            handle_send_appendentry_rpc()
     else:
         resp = msg
         resp['dst']=resp['src']
@@ -144,8 +152,10 @@ def handle_sendvote(msg):
        if(vote_received == 3):
           #print("send announce leader------\n" + my_id)
           for i in replicas:
-             next_index[i] = commit_idx +1
+             #next_index[i] = commit_idx +1
+             next_index[i] = len(log_entry)
              match_index[i] = -1
+             #next_index_changes[i] = True
           leader_id = my_id
           role = 3
 
@@ -160,88 +170,106 @@ def commit_state_machine():
       last_applied +=1
       store[entry['key']]=entry['value']
 
-def broad_cast_rpc(key, value, client, mid):
-    global store
+# follower receive appendentries rpc (including heartbeat)
+def handle_receive_appendentry_rpc(msg):
     global log_entry
-    global next_index
-    global log_entry
-    global leader_id
-    global my_id
-    global current_term
-    global commit_idx
-
-    if my_id == leader_id:
-        log_entry.append({'key': key, 'value':  value, 'term': current_term,
-                          'client': client, 'MID': mid})
-        # broadcase AppendEntries RPC to all followers
-        resp = {'src':my_id, 'leader': my_id, 'type': 'append_entry_rpc',
-                'leader_commit': commit_idx}
-        for k in next_index.keys():
-            # If last log index >= nextIndex for this follower:
-            # send AppendEntries RPC with log entries starting at nextIndex
-            if len(log_entry) - 1 >= next_index[k]:
-                pli = next_index[k] - 1
-                resp['prelog_idx'] = pli
-                resp['prelog_term'] = log_entry[pli]['term']
-                resp['entries']= log_entry[next_index[k]:]
-                resp['dst'] = k
-                send_msg(resp)
-    else:
-        return       
-
-def handle_heartbeat_rpc(msg):
     global commit_idx
     global last_action_time
-    
+   
+    #self is a leader 
+    if my_id==leader_id:
+        return
+
     if msg['leader_commit'] > commit_idx:
        commit_idx = min(msg['leader_commit'], len(log_entry)-1)
     last_action_time = time.time()
 
-def handle_appendentry_rpc(msg):
-   global log_entry
-   #self is a leader 
-   if my_id==leader_id:
-      return
-   else:
-      handle_heartbeat_rpc(msg)
-      if(len(log_entry)-1 < msg['prelog_idx']):
-         resp = {'type': 'check_term', 'src': my_id, 'dst': leader_id, 'leader': leader_id}
-         send_msg(resp)
-      elif msg['prelog_idx'] < 0:
-         log_entry = msg['entries']
-         resp = {'type': 'put_success', 'src': my_id, 'dst': leader_id,
-                 'leader': leader_id, 'next_idx': len(log_entry)}
-         send_msg(resp)
-      else:
-         term = log_entry[msg['prelog_idx']]['term']
-         if term != msg['prelog_term']:
-             resp = {'type': 'check_term', 'src': my_id, 'dst': leader_id, 'leader': leader_id}
-             send_msg(resp)
-         else:
-             idx = msg['prelog_idx']+1
-             prev_entry = log_entry[0:idx]
-             log_entry = prev_entry + msg['entries']
-             resp = {'type': 'put_success', 'src': my_id, 'dst': leader_id,
-                     'leader': leader_id, 'next_idx': len(log_entry)}
-             send_msg(resp)
+    if len(msg['entries']) != 0:
+        # receive append entries rpc (not heartbeat)
+        if (len(log_entry) - 1 < msg['prelog_idx']):
+            resp = {'type': 'check_term', 'src': my_id, 'dst': leader_id, 'leader': leader_id}
+            send_msg(resp)
+        elif msg['prelog_idx'] < 0:
+            log_entry = msg['entries']
+            resp = {'type': 'put_success', 'src': my_id, 'dst': leader_id,
+                    'leader': leader_id, 'next_idx': len(log_entry)}
+            send_msg(resp)
+        else:
+            term = log_entry[msg['prelog_idx']]['term']
+            if term != msg['prelog_term']:
+                resp = {'type': 'check_term', 'src': my_id, 'dst': leader_id, 'leader': leader_id}
+                send_msg(resp)
+            else:
+                idx = msg['prelog_idx']+1
+                prev_entry = log_entry[0:idx]
+                log_entry = prev_entry + msg['entries']
+                resp = {'type': 'put_success', 'src': my_id, 'dst': leader_id,
+                        'leader': leader_id, 'next_idx': len(log_entry)}
+                send_msg(resp)
+
+
+# leader send heartbeat
+def handle_send_appendentry_rpc_heartbeat():
+    global my_id
+    global commit_idx
+    global next_index
+    global next_index_changes
+
+    for k in next_index.keys():
+        send_one_appendentry_rpc(k, [])
+
+def handle_send_appendentry_rpc():
+    global my_id
+    global commit_idx
+    global next_index
+    global next_index_changes
+
+    for k in next_index.keys():
+        
+        # If last log index >= nextIndex for this follower:
+        # send AppendEntries RPC with log entries starting at nextIndex
+        if len(log_entry) - 1 >= next_index[k]:
+            send_one_appendentry_rpc(k, log_entry[next_index[k]:])
+            
+
+def send_one_appendentry_rpc(k, entries):
+    global my_id
+    global commit_idx
+    global next_index
+    global next_index_changes
+
+    if check_rpc[k] == True:
+        # I have sent one rpc
+        return
+
+    resp = {'src':my_id, 'leader': leader_id, 'type': 'append_entry_rpc', 'leader_commit': commit_idx}
+    pli = next_index[k] - 1
+    resp['prelog_idx'] = pli
+    if pli < 0:
+        resp['prelog_term'] = -1
+    else:
+        resp['prelog_term'] = log_entry[pli]['term']
+    resp['dst'] = k
+    resp['entries'] = entries
+    check_rpc[k] = True
+    send_msg(resp)
 
 def handle_check_term(msg):
     global log_entry
     global next_index
+    #global next_index_changes
 
+    #next_index_changes[msg['src']] = True
     next_index[msg['src']] -= 1
-    prelog_idx = next_index[msg['src']]-1
-    prelog_term = log_entry[prelog_idx]['term']
-    entries = log_entry[next_index[msg['src']]:]
-    resp = {'src':my_id, 'dst': msg['src'],'leader': my_id,
-            'type': 'append_entry_rpc', 'leader_commit': commit_idx,
-            'prelog_idx':prelog_idx, 'prelog_term': prelog_term, 'entries': entries}
-    send_msg(resp)
+    send_one_appendentry_rpc(msg['src'], log_entry[next_index[msg['src']]:])
 
 
 def handle_put_success(msg):
     global next_index
     global match_index
+    #global next_index_changes
+
+    #next_index_changes[msg['src']] = True
 
     src = msg['src']
     next_index[src] = msg['next_idx']
@@ -285,7 +313,7 @@ def handle_recv(msg):
 
     msg_type = msg['type']
     
-    if (msg_type == 'heartbeat_rpc' or msg_type == 'append_entry_rpc'):
+    if (msg_type == 'append_entry_rpc'):
         # for candidate or follower: If it received AppendEntries RPC
         # from new leader: convert to follower of this leader
         if role != 3:
@@ -303,12 +331,9 @@ def handle_recv(msg):
     # receive RequestVote from candidate
     elif msg_type == 'get_vote' and msg['src'] != my_id:
         handle_getvote(msg)    
-    #received hearbeat rpc from leader
-    elif msg_type == 'heartbeat_rpc' and role != 3:
-        handle_heartbeat_rpc(msg)
-    # receive apendentries rpc
+    # receive apendentries rpc (include heartbeat)
     elif msg_type == 'append_entry_rpc' and role != 3:
-        handle_appendentry_rpc(msg)
+        handle_receive_appendentry_rpc(msg)
     #received a vote from others
     elif msg_type == 'send_vote' and role == 2:
         handle_sendvote(msg)
@@ -323,6 +348,11 @@ def handle_recv(msg):
 last_action_time = time.time()
 while True:
     #print("current leader: =" + str(leader_id))
+
+    # remeber do I send rpc for all followers if I am leader
+    check_rpc = {}
+    for r in replicas:
+        check_rpc[r] = False
 
     ready = select.select([sock], [], [], 0.1)[0]
     if sock in ready:
@@ -344,11 +374,11 @@ while True:
 
     if my_id==leader_id and role == 3:
         update_leader_commitIndex()
-    
+        
     #send a heartbeat if self is the leader
     if time_passed > heartbeat_interval and my_id==leader_id and role == 3:
-        msg = {'src': my_id, 'dst': 'FFFF', 'leader': leader_id, 'type': 'heartbeat_rpc', 'leader_commit': commit_idx}
-        send_msg(msg)
+        #send_msg(msg)
+        handle_send_appendentry_rpc_heartbeat()
         last_action_time = time.time()
     #become a candidate after candidate timeout
     elif time_passed > candidate_timeout and role == 2:
