@@ -23,13 +23,10 @@ last_applied = -1
 #--------constant---------
 #candidate timeout (1.5~3s)
 candidate_timeout = random.randrange(15000, 30000) / 10000.0000
-#timeout of waiting for heartbeat from leader
-#leader_timeout = 0.25
 #interval of sending heartbeat
 heartbeat_interval = 0.1
 #last action's time
 last_action_time = time.time()
-last_action_time=0
 
 
 
@@ -56,6 +53,7 @@ def getVote():
     if leader_id == 'FFFF': 
        #broadcast get_vote message to all replicas
        current_term += 1
+       voted = True
        msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'get_vote', 'term':current_term, 'leader': 'FFFF', 'lastLogIndex': len(log_entry)-1}
        sock.send(json.dumps(msg))
        #print '%s sending a get_vote to %s' % (msg['src'], msg['dst'])
@@ -159,10 +157,13 @@ def handle_getvote(msg):
     global role
     global voted
     if msg['term'] > current_term and msg['lastLogIndex'] < len(log_entry)-1:
+       print("here------")
+       if leader_id == my_id:
+           print("I am leader")
        leader_id='FFFF'
        role=1
        current_term = msg['term']
-       
+              
     if not voted and msg['term'] >= current_term and leader_id=='FFFF' and msg['lastLogIndex'] >= len(log_entry)-1:
        print("vote----------\n"+my_id+" "+msg['src'])
        resp = {'src': my_id, 'dst': msg['src'], 'type': 'send_vote', 'leader': 'FFFF'}
@@ -201,10 +202,14 @@ def commit_state_machine():
 def handle_heartbeat(msg):
     global commit_idx
     global last_action_time
+    if leader_id != msg['leader']:
+        return
+    
     last_action_time = time.time()
     if msg['commit_idx'] > commit_idx:
        commit_idx = min(msg['commit_idx'], len(log_entry)-1)
     commit_state_machine()
+    last_action_time = time.time()
 
 #msg:  {'src':my_id, 'leader': my_id, 'type': 'append_entry_rpc', 'leader_commit': commit_idx, 'prelog_idx', 'prelog_term', 'entries'}
 #resp: {'src': , 'dst', 'leader', 'success':}
@@ -299,7 +304,6 @@ def handle_recv(msg):
     #received hearbeat from leader
     elif msg_type == 'heartbeat_rpc' and not role==3:
          handle_heartbeat(msg)
-         last_action_time = time.time()
         #received a vote from others
     elif msg_type == 'send_vote':
         handle_sendvote(msg) 
