@@ -44,9 +44,6 @@ sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 sock.connect(my_id)
 
 
-
-
-
 def getVote():
     global current_term
     global leader_id
@@ -177,7 +174,8 @@ def broad_cast_rpc(key, value, client, mid):
         resp = {'src':my_id, 'leader': my_id, 'type': 'append_entry_rpc',
                 'leader_commit': commit_idx}
         for k in next_index.keys():
-            # If last log index >= nextIndex for a follower: send
+            # If last log index >= nextIndex for this follower:
+            # send AppendEntries RPC with log entries starting at nextIndex
             if len(log_entry) - 1 >= next_index[k]:
                 pli = next_index[k] - 1
                 resp['prelog_idx'] = pli
@@ -218,9 +216,7 @@ def handle_appendentry_rpc(msg):
              send_msg(resp)
          else:
              idx = msg['prelog_idx']+1
-             #print("idx:----------", idx)
              prev_entry = log_entry[0:idx]
-             #print("-----------------------prev entry", prev_entry)
              log_entry = prev_entry + msg['entries']
              resp = {'type': 'put_success', 'src': my_id, 'dst': leader_id,
                      'leader': leader_id, 'next_idx': len(log_entry)}
@@ -229,18 +225,16 @@ def handle_appendentry_rpc(msg):
 def handle_check_term(msg):
     global log_entry
     global next_index
-    
+
     next_index[msg['src']] -= 1
-    if my_id==leader_id:
-       prelog_idx = next_index[msg['src']]-1
-       prelog_term = log_entry[prelog_idx]['term']
-       entries = log_entry[next_index[msg['src']]:]
-       resp = {'src':my_id, 'dst': msg['src'],'leader': my_id,
-               'type': 'append_entry_rpc', 'leader_commit': commit_idx,
-               'prelog_idx':prelog_idx, 'prelog_term': prelog_term, 'entries': entries}
-       send_msg(resp)
-    else:
-        return
+    prelog_idx = next_index[msg['src']]-1
+    prelog_term = log_entry[prelog_idx]['term']
+    entries = log_entry[next_index[msg['src']]:]
+    resp = {'src':my_id, 'dst': msg['src'],'leader': my_id,
+            'type': 'append_entry_rpc', 'leader_commit': commit_idx,
+            'prelog_idx':prelog_idx, 'prelog_term': prelog_term, 'entries': entries}
+    send_msg(resp)
+
 
 def handle_put_success(msg):
     global next_index
@@ -249,12 +243,11 @@ def handle_put_success(msg):
     global last_applied
 
     src = msg['src']
-    next_index[src]=msg['next_idx']
-    match_index[src]=msg['next_idx']-1
+    next_index[src] = msg['next_idx']
+    match_index[src] = msg['next_idx']-1
 
-    
     # If there exists an N such that N > commitIndex, a majority
-    # of matchIndex[i] ≥ N, and log[N].term == currentTerm: set commitIndex = N
+    # of matchIndex[i] >= N, and log[N].term == currentTerm: set commitIndex = N
     values = match_index.values()
     values.sort()
     new_commit_idx = 1
@@ -285,13 +278,14 @@ def handle_recv(msg):
 
     msg_type = msg['type']
     
-    # for candidate or follower: If it received AppendEntries RPC
-    # from new leader: convert to follower of this leader
-    if (msg_type == 'heartbeat_rpc' or msg_type == 'append_entry_rpc') and role != 3:
-        role = 1
-        vote_received = 1
-        voted = False
-        leader_id = msg['leader']
+    if (msg_type == 'heartbeat_rpc' or msg_type == 'append_entry_rpc'):
+        # for candidate or follower: If it received AppendEntries RPC
+        # from new leader: convert to follower of this leader
+        if role != 3:
+            role = 1
+            vote_received = 1
+            voted = False
+            leader_id = msg['leader']
     
     if (msg_type == 'get' or msg_type=='put'):
         handle_get_put(msg)
