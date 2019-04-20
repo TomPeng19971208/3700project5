@@ -22,9 +22,9 @@ last_applied = -1
 
 #--------constant---------
 #candidate timeout (1.5~3s)
-candidate_timeout = random.randrange(150, 300)/100
+candidate_timeout = random.randrange(15000, 30000)/10000
 #timeout of waiting for heartbeat from leader
-leader_timeout = 0.25
+#leader_timeout = 0.25
 #interval of sending heartbeat
 heartbeat_interval = 0.1
 #last action's time
@@ -55,15 +55,19 @@ def getVote():
     #print("get vote----------"+my_id)
     if leader_id == 'FFFF': 
        #broadcast get_vote message to all replicas
+       current_term += 1
        msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': 'get_vote', 'term':current_term, 'leader': 'FFFF', 'lastLogIndex': len(log_entry)-1}
        sock.send(json.dumps(msg))
        #print '%s sending a get_vote to %s' % (msg['src'], msg['dst'])
-       current_term += 1
+       
     else:
         return
         
     #when broad cast, set dst to 'FFFF'
 def send_msg(msg):
+    if 'entries' in msg.keys():
+       if len(msg['entries'])>50:
+           return
     if msg['dst']=='FFFF':
        for r in replicas:
            msg['dst']=r
@@ -77,7 +81,7 @@ def reset_timeouts():
     global last_action_time
     global candidate_timeout
     last_action_time = time.time()
-    candidate_timeout = random.randrange(150, 300)/100
+    candidate_timeout = random.randrange(15000, 30000)/10000
 
 #execute all of the messages stored in the buffer
 def clear_buffer():
@@ -150,7 +154,16 @@ def handle_get_put(msg):
 
 def handle_getvote(msg):
     global voted
-    if not voted and msg['term'] >= current_term and msg['lastLogIndex'] >= len(log_entry)-1:
+    global current_term
+    global leader_id
+    global role
+    global voted
+    #if msg['term'] > current_term:
+    #   leader_id='FFFF'
+    #   role=1
+    #   current_term = msg['term']
+    #   return
+    if not voted and msg['term'] >= current_term and leader_id=='FFFF' and msg['lastLogIndex'] >= len(log_entry)-1:
        print("vote----------\n"+my_id+" "+msg['src'])
        resp = {'src': my_id, 'dst': msg['src'], 'type': 'send_vote', 'leader': 'FFFF'}
        send_msg(resp)
@@ -159,14 +172,17 @@ def handle_getvote(msg):
 def handle_sendvote(msg):
     global vote_received
     global next_index
+    global leader_id
+    
     if leader_id=='FFFF':
        vote_received += 1
        if(vote_received == 3):
-          print("send announce leader------\n" + my_id)
+          #print("send announce leader------\n" + my_id)
           for i in replicas:
              next_index[i] = commit_idx +1
              match_index[i] = -1
-          #leader_id = my_id
+          leader_id = my_id
+          role = 3
           send_msg({'src': my_id, 'dst': 'FFFF','type': 'announce_leader', 'term': current_term, 'leader': my_id})
 
 def commit_state_machine():
@@ -187,7 +203,7 @@ def handle_heartbeat(msg):
     global last_action_time
     last_action_time = time.time()
     if msg['commit_idx'] > commit_idx:
-       commit_idx = min(msg['commit_idx'], len(log_entry))
+       commit_idx = min(msg['commit_idx'], len(log_entry)-1)
     commit_state_machine()
 
 #msg:  {'src':my_id, 'leader': my_id, 'type': 'append_entry_rpc', 'leader_commit': commit_idx, 'prelog_idx', 'prelog_term', 'entries'}
@@ -245,14 +261,17 @@ def handle_put_success(msg):
     #print("match idx: ", match_index)
     values = match_index.values()
     values.sort()
-    new_commit_idx = values[1]
+    try:
+      new_commit_idx = values[2]
+    except e:
+      print(values)
     #new_commit_idx = values.sort()[2]
     if new_commit_idx < 0:
        return
     for i in range(last_applied+1, new_commit_idx + 1):
         target = log_entry[i]
         resp = {'src': my_id, 'dst': target['client'], 'leader': leader_id, 'type': 'ok', 'MID': target['MID']}
-       # print("put-------------\n", resp)
+        #print("put-------------\n", resp)
         send_msg(resp)
     commit_idx = new_commit_idx
     commit_state_machine() 
@@ -287,6 +306,7 @@ def handle_recv(msg):
     elif msg_type == 'put_success':
         handle_put_success(msg)
     elif msg_type == 'announce_leader' and leader_id=='FFFF':
+        voted = False
         print("received announce_leader")
         current_term = msg['term']
         vote_received = 1
@@ -299,6 +319,7 @@ def handle_recv(msg):
         #print(recv_buffer)
         clear_buffer()
 
+
 while True:
     #print(leader_id)
 
@@ -310,32 +331,30 @@ while True:
         #if leader is lost or has not been elected, add the msg to a buffer
         if leader_id=='FFFF' and (msg['type']=='put' or msg['type']=='get'):
             recv_buffer.append(msg)
-        #else:
-        #    clear_buffer()
         else:
+            clear_buffer()
             handle_recv(msg)
         #end of receiving msgs---------
         clock = time.time()
         time_passed = clock-last_action_time
         #send a heartbeat if self is the leader
         if time_passed > heartbeat_interval and my_id==leader_id:
-            #print("send heartbeat------")
             #print(my_id)
             msg = {'src': my_id, 'dst': 'FFFF', 'leader': leader_id, 'type': 'heartbeat_rpc', 'commit_idx': commit_idx}
             send_msg(msg)
             last_action_time = time.time()
-            #become a candidate after candidate timeout
-        elif time_passed > candidate_timeout and (not my_id==leader_id) and leader_id=='FFFF':
+        #become a candidate after candidate timeout
+        elif time_passed > candidate_timeout and role != 3 and (not my_id==leader_id) :
+            leader_id='FFFF'
             role = 2
             getVote()
-            last_action_time = time.time()
-            #remove leader if self has not received hearbeats from leader
-        elif time_passed > leader_timeout and not my_id==leader_id:
-            print("time_passed: "+str(time_passed)+ " " + str(leader_timeout))
-            leader_id='FFFF'
-            voted = False
             reset_timeouts()
-        last_action_time=time.time()
+        #remove leader if self has not received hearbeats from leader
+        #elif time_passed > leader_timeout and (not my_id==leader_id) and leader_id != 'FFFF':
+        #    print("time_passed: "+str(time_passed)+ " " + str(leader_timeout))
+        #    leader_id='FFFF'
+        #    reset_timeouts()
+        #last_action_time=time.time()
         
         
         
