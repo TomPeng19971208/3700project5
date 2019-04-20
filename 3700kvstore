@@ -22,7 +22,7 @@ last_applied = -1
 
 #--------constant---------
 #candidate timeout (1.5~3s)
-candidate_timeout = random.randrange(15000, 30000) / 10000.0000
+candidate_timeout = random.randrange(1500, 3000) / 10000.0000
 #interval of sending heartbeat
 heartbeat_interval = 0.1
 #last action's time
@@ -70,8 +70,8 @@ def send_msg(msg):
        for r in replicas:
            msg['dst']=r
            sock.send(json.dumps(msg))
-       msg['dst']=my_id
-       sock.send(json.dumps(msg))
+       #msg['dst']=my_id
+       #sock.send(json.dumps(msg))
     else:
        sock.send(json.dumps(msg))
  
@@ -79,8 +79,9 @@ def reset_timeouts():
     global last_action_time
     global candidate_timeout
     last_action_time = time.time()
-    candidate_timeout = random.randrange(15000, 30000) / 10000.0000
+    candidate_timeout = random.randrange(1500, 3000) / 10000.0000
 
+"""
 #execute all of the messages stored in the buffer
 def clear_buffer():
     global recv_buffer
@@ -96,7 +97,7 @@ def clear_buffer():
             redirect = {"src": my_id, "dst": msg['src'], "leader": leader_id, "type": "redirect", "MID": msg['MID']}
             send_msg(redirect)
             #print("redirect to: " + str(leader_id))
-        recv_buffer = []
+        recv_buffer = [] """
 
 def do_get(key, mid):
     if key in store.keys():
@@ -299,7 +300,7 @@ def handle_recv(msg):
     global leader_id
     global role
     global store
-    global recv_buffer
+    #global recv_buffer
     msg_type = msg['type']
     if (msg_type == 'get' or msg_type=='put'):
         handle_get_put(msg)
@@ -329,9 +330,10 @@ def handle_recv(msg):
            role = 1
         reset_timeouts()
         #print(recv_buffer)
-        clear_buffer()
+        #clear_buffer()
 
 
+last_action_time = time.time()
 while True:
     #print("current leader: =" + str(leader_id))
 
@@ -342,39 +344,34 @@ while True:
         msg = json.loads(msg_raw)
         #if leader is lost or has not been elected, add the msg to a buffer
         if leader_id=='FFFF' and (msg['type']=='put' or msg['type']=='get'):
-            recv_buffer.append(msg)
-        else:
-            clear_buffer()
-            handle_recv(msg)
-        #end of receiving msgs---------
-        clock = time.time()
-        time_passed = clock-last_action_time
-        #send a heartbeat if self is the leader
-        if time_passed > heartbeat_interval and my_id==leader_id:
-            #print(my_id)
-            msg = {'src': my_id, 'dst': 'FFFF', 'leader': leader_id, 'type': 'heartbeat_rpc', 'commit_idx': commit_idx}
+            msg = {"src": my_id, "dst": msg['src'], "leader": 'FFFF', "type": "redirect", "MID": msg['MID']}
             send_msg(msg)
-            last_action_time = time.time()
-        #become a candidate after candidate timeout
-        elif time_passed > candidate_timeout and role == 2:
-            role = 1
-            voted = False
-            vote_received = 1
-        elif time_passed > candidate_timeout and role == 1:
-            print("time_passed: "+str(time_passed)+ " " + str(candidate_timeout))
-            leader_id='FFFF'
-            role = 2
-            getVote()
-            reset_timeouts()
-            
-        #remove leader if self has not received hearbeats from leader
-        #elif time_passed > leader_timeout and (not my_id==leader_id) and leader_id != 'FFFF':
-        #    print("time_passed: "+str(time_passed)+ " " + str(leader_timeout))
-        #    leader_id='FFFF'
-        #    reset_timeouts()
-        #last_action_time=time.time()
+            #recv_buffer.append(msg)
+        else:
+            #clear_buffer()
+            handle_recv(msg)
         
-        
+    #end of receiving msgs---------
+    clock = time.time()
+    time_passed = clock - last_action_time
+    #send a heartbeat if self is the leader
+    if time_passed > heartbeat_interval and my_id==leader_id:
+        #print(my_id)
+        msg = {'src': my_id, 'dst': 'FFFF', 'leader': leader_id, 'type': 'heartbeat_rpc', 'commit_idx': commit_idx}
+        send_msg(msg)
+        last_action_time = time.time()
+    #become a candidate after candidate timeout
+    elif time_passed > candidate_timeout and role == 2:
+        role = 1
+        voted = False
+        vote_received = 1
+        reset_timeouts()
+    elif time_passed > candidate_timeout and role == 1:
+        print("time_passed: "+str(time_passed)+ " " + str(candidate_timeout))
+        leader_id='FFFF'
+        role = 2
+        getVote()
+        reset_timeouts()
         
         
         
