@@ -21,7 +21,7 @@ commit_idx = -1
 last_applied = -1
 
 #--------constant---------
-#candidate timeout (1.5~3s)
+#candidate timeout (0.15~0.3s)
 candidate_timeout = random.randrange(1500, 3000) / 10000.0000
 #interval of sending heartbeat
 heartbeat_interval = 0.1
@@ -49,6 +49,10 @@ sock.connect(my_id)
 
 def getVote():
     global current_term
+    global leader_id
+    global voted
+    global log_entry
+    
     #print("get vote----------"+my_id)
     if leader_id == 'FFFF': 
        #broadcast get_vote message to all replicas
@@ -63,15 +67,15 @@ def getVote():
         
     #when broad cast, set dst to 'FFFF'
 def send_msg(msg):
+    
     if 'entries' in msg.keys():
        if len(msg['entries'])>50:
            return
+        
     if msg['dst']=='FFFF':
        for r in replicas:
            msg['dst']=r
            sock.send(json.dumps(msg))
-       #msg['dst']=my_id
-       #sock.send(json.dumps(msg))
     else:
        sock.send(json.dumps(msg))
  
@@ -81,54 +85,20 @@ def reset_timeouts():
     last_action_time = time.time()
     candidate_timeout = random.randrange(1500, 3000) / 10000.0000
 
-"""
-#execute all of the messages stored in the buffer
-def clear_buffer():
-    global recv_buffer
-    #self is the leader
-    if role==3:
-        #print(recv_buffer)
-        for msg in recv_buffer:
-            handle_recv(msg)
-        recv_buffer=[]
-    else:
-        #print(recv_buffer)
-        for msg in recv_buffer:
-            redirect = {"src": my_id, "dst": msg['src'], "leader": leader_id, "type": "redirect", "MID": msg['MID']}
-            send_msg(redirect)
-            #print("redirect to: " + str(leader_id))
-        recv_buffer = [] """
 
 def do_get(key, mid):
+    global store
+    
     if key in store.keys():
         #print("get----------", key, store[key], mid)
         return {'type': 'ok', 'MID': mid, 'value': store[key]}
     else:
         return {'type': 'ok', 'value': '', 'MID': mid}
     
-def broad_cast_rpc(key, value, client, mid):
-    global store
-    global log_entry
-    global next_index
-    log_entry
-    if my_id==leader_id:
-        #store[key]= value
-        log_entry.append({'key': key, 'value':  value, 'term': current_term, 'client': client, 'MID': mid})
-        # broadcase AppendEntries RPC to all followers
-        resp = {'src':my_id, 'leader': my_id, 'type': 'append_entry_rpc', 'leader_commit': commit_idx}
-        for k in next_index.keys():
-           pli = next_index[k]-1
-           resp['prelog_idx']=pli
-           resp['prelog_term'] = log_entry[pli]['term']
-           resp['entries']=log_entry[next_index[k]:]
-           resp['dst']=k
-           send_msg(resp)
-    else:
-        return
-        
-
-
 def handle_get_put(msg):
+    global leader_id
+    global my_id
+    
     msg_type = msg['type']
     #self is the leader
     if leader_id == my_id:
@@ -157,17 +127,6 @@ def handle_getvote(msg):
     global leader_id
     global role
     global voted
-
-    if msg['src'] == my_id:
-        return
-    
-    if msg['term'] > current_term and msg['lastLogIndex'] < len(log_entry)-1:
-       print("here------")
-       if leader_id == my_id:
-           print("I am leader")
-       leader_id='FFFF'
-       role=1
-       current_term = msg['term']
               
     if not voted and msg['term'] >= current_term and leader_id=='FFFF' and msg['lastLogIndex'] >= len(log_entry)-1:
        print("vote----------\n"+my_id+" "+msg['src'])
@@ -179,6 +138,7 @@ def handle_sendvote(msg):
     global vote_received
     global next_index
     global leader_id
+    global role
     
     if leader_id=='FFFF':
        vote_received += 1
@@ -189,35 +149,54 @@ def handle_sendvote(msg):
              match_index[i] = -1
           leader_id = my_id
           role = 3
-          send_msg({'src': my_id, 'dst': 'FFFF','type': 'announce_leader', 'term': current_term, 'leader': my_id})
 
 def commit_state_machine():
     global commit_idx
     global last_applied
     global store 
-    #print("commit_state_machine")
-    #print(last_applied)
-    #print(commit_idx)
+
     while(last_applied < commit_idx):
       entry = log_entry[last_applied+1]
       last_applied +=1
       store[entry['key']]=entry['value']
-       
 
-def handle_heartbeat(msg):
+def broad_cast_rpc(key, value, client, mid):
+    global store
+    global log_entry
+    global next_index
+    global log_entry
+    global leader_id
+    global my_id
+    global current_term
+    global commit_idx
+
+    if my_id == leader_id:
+        log_entry.append({'key': key, 'value':  value, 'term': current_term,
+                          'client': client, 'MID': mid})
+        # broadcase AppendEntries RPC to all followers
+        resp = {'src':my_id, 'leader': my_id, 'type': 'append_entry_rpc',
+                'leader_commit': commit_idx}
+        for k in next_index.keys():
+            # If last log index >= nextIndex for a follower: send
+            if len(log_entry) - 1 >= next_index[k]:
+                pli = next_index[k] - 1
+                resp['prelog_idx'] = pli
+                resp['prelog_term'] = log_entry[pli]['term']
+                resp['entries']= log_entry[next_index[k]:]
+                resp['dst'] = k
+                send_msg(resp)
+    else:
+        return       
+
+def handle_heartbeat_rpc(msg):
     global commit_idx
     global last_action_time
-    if leader_id != msg['leader']:
-        return
     
-    last_action_time = time.time()
     if msg['commit_idx'] > commit_idx:
        commit_idx = min(msg['commit_idx'], len(log_entry)-1)
     commit_state_machine()
     last_action_time = time.time()
 
-#msg:  {'src':my_id, 'leader': my_id, 'type': 'append_entry_rpc', 'leader_commit': commit_idx, 'prelog_idx', 'prelog_term', 'entries'}
-#resp: {'src': , 'dst', 'leader', 'success':}
 def handle_appendentry_rpc(msg):
    global log_entry
    #self is a leader 
@@ -227,9 +206,10 @@ def handle_appendentry_rpc(msg):
       if(len(log_entry)-1 < msg['prelog_idx']):
          resp = {'type': 'check_term', 'src': my_id, 'dst': leader_id, 'leader': leader_id}
          send_msg(resp)
-      elif msg['prelog_idx']<0:
+      elif msg['prelog_idx'] < 0:
          log_entry = msg['entries']
-         resp = {'type': 'put_success', 'src': my_id, 'dst': leader_id, 'leader': leader_id, 'next_idx': len(log_entry)}
+         resp = {'type': 'put_success', 'src': my_id, 'dst': leader_id,
+                 'leader': leader_id, 'next_idx': len(log_entry)}
          send_msg(resp)
       else:
          term = log_entry[msg['prelog_idx']]['term']
@@ -242,18 +222,22 @@ def handle_appendentry_rpc(msg):
              prev_entry = log_entry[0:idx]
              #print("-----------------------prev entry", prev_entry)
              log_entry = prev_entry + msg['entries']
-             resp = {'type': 'put_success', 'src': my_id, 'dst': leader_id, 'leader': leader_id, 'next_idx': len(log_entry)}
+             resp = {'type': 'put_success', 'src': my_id, 'dst': leader_id,
+                     'leader': leader_id, 'next_idx': len(log_entry)}
              send_msg(resp)
 
 def handle_check_term(msg):
     global log_entry
     global next_index
+    
     next_index[msg['src']] -= 1
     if my_id==leader_id:
        prelog_idx = next_index[msg['src']]-1
        prelog_term = log_entry[prelog_idx]['term']
        entries = log_entry[next_index[msg['src']]:]
-       resp = {'src':my_id, 'dst': msg['src'],'leader': my_id, 'type': 'append_entry_rpc', 'leader_commit': commit_idx, 'prelog_idx':prelog_idx, 'prelog_term': prelog_term, 'entries': entries}
+       resp = {'src':my_id, 'dst': msg['src'],'leader': my_id,
+               'type': 'append_entry_rpc', 'leader_commit': commit_idx,
+               'prelog_idx':prelog_idx, 'prelog_term': prelog_term, 'entries': entries}
        send_msg(resp)
     else:
         return
@@ -264,22 +248,20 @@ def handle_put_success(msg):
     global commit_idx
     global last_applied
 
-    if msg["leader"] != my_id:
-        return
-    
     src = msg['src']
     next_index[src]=msg['next_idx']
-    #print("previous match idx: ", match_index)
     match_index[src]=msg['next_idx']-1
-    #print("match idx: ", match_index)
+
+    
+    # If there exists an N such that N > commitIndex, a majority
+    # of matchIndex[i] ≥ N, and log[N].term == currentTerm: set commitIndex = N
     values = match_index.values()
     values.sort()
-    new_commit_idx = 1;
+    new_commit_idx = 1
     try:
       new_commit_idx = values[2]
     except:
       print(values)
-    #new_commit_idx = values.sort()[2]
     if new_commit_idx < 0:
        return
     for i in range(last_applied+1, new_commit_idx + 1):
@@ -300,37 +282,37 @@ def handle_recv(msg):
     global leader_id
     global role
     global store
-    #global recv_buffer
+
     msg_type = msg['type']
+    
+    # for candidate or follower: If it received AppendEntries RPC
+    # from new leader: convert to follower of this leader
+    if (msg_type == 'heartbeat_rpc' or msg_type == 'append_entry_rpc') and role != 3:
+        role = 1
+        vote_received = 1
+        voted = False
+        leader_id = msg['leader']
+    
     if (msg_type == 'get' or msg_type=='put'):
         handle_get_put(msg)
-    elif msg_type == 'get_vote':
+    # receive RequestVote from candidate
+    elif msg_type == 'get_vote' and msg['src'] != my_id:
         handle_getvote(msg)    
-    #received hearbeat from leader
-    elif msg_type == 'heartbeat_rpc' and not role==3:
-         handle_heartbeat(msg)
-        #received a vote from others
-    elif msg_type == 'send_vote':
-        handle_sendvote(msg) 
-    elif msg_type == 'append_entry_rpc':
+    #received hearbeat rpc from leader
+    elif msg_type == 'heartbeat_rpc' and role != 3:
+        handle_heartbeat_rpc(msg)
+    # receive apendentries rpc
+    elif msg_type == 'append_entry_rpc' and role != 3:
         handle_appendentry_rpc(msg)
-    elif msg_type == 'check_term': 
+    #received a vote from others
+    elif msg_type == 'send_vote' and role == 2:
+        handle_sendvote(msg)
+    # leader recieve response of append_entry_rpc from follower (it return false for append_entry_rpc)
+    elif msg_type == 'check_term'and role == 3 and msg["leader"] == my_id: 
         handle_check_term(msg)
-    elif msg_type == 'put_success':
+    # leader recieve response of append_entry_rpc from follower (it return true for append_entry_rpc)
+    elif msg_type == 'put_success'and role == 3 and msg["leader"] == my_id:
         handle_put_success(msg)
-    elif msg_type == 'announce_leader' and leader_id=='FFFF':
-        voted = False
-        print("received announce_leader")
-        current_term = msg['term']
-        vote_received = 1
-        leader_id = msg['leader']
-        if leader_id==my_id:
-           role = 3
-        else:
-           role = 1
-        reset_timeouts()
-        #print(recv_buffer)
-        #clear_buffer()
 
 
 last_action_time = time.time()
@@ -342,21 +324,19 @@ while True:
         msg_raw = sock.recv(32768)
         if len(msg_raw) == 0: continue
         msg = json.loads(msg_raw)
-        #if leader is lost or has not been elected, add the msg to a buffer
+        
+        #if leader is lost or has not been elected, response redirect
         if leader_id=='FFFF' and (msg['type']=='put' or msg['type']=='get'):
             msg = {"src": my_id, "dst": msg['src'], "leader": 'FFFF', "type": "redirect", "MID": msg['MID']}
             send_msg(msg)
-            #recv_buffer.append(msg)
         else:
-            #clear_buffer()
             handle_recv(msg)
         
-    #end of receiving msgs---------
+    #after receiving msgs---------
     clock = time.time()
     time_passed = clock - last_action_time
     #send a heartbeat if self is the leader
-    if time_passed > heartbeat_interval and my_id==leader_id:
-        #print(my_id)
+    if time_passed > heartbeat_interval and my_id==leader_id and role == 3:
         msg = {'src': my_id, 'dst': 'FFFF', 'leader': leader_id, 'type': 'heartbeat_rpc', 'commit_idx': commit_idx}
         send_msg(msg)
         last_action_time = time.time()
