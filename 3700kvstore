@@ -295,7 +295,11 @@ def handle_recv(msg):
             leader_id = msg['leader']
     
     if (msg_type == 'get' or msg_type=='put'):
-        handle_get_put(msg)
+       if leader_id=='FFFF' or role==2:
+          msg = {"src": my_id, "dst": msg['src'], "leader": 'FFFF', "type": "fail", "MID": msg['MID']}
+          send_msg(msg)
+       else:
+          handle_get_put(msg)
     # receive RequestVote from candidate
     elif msg_type == 'get_vote' and msg['src'] != my_id:
         handle_getvote(msg)    
