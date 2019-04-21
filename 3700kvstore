@@ -177,14 +177,15 @@ def handle_receive_appendentry_rpc(msg):
     global log_entry
     global commit_idx
     global last_action_time
-   
+    global leader_id
+    global role   
     #self is a leader 
     if my_id==leader_id:
-        return
+       return
+
 
     if msg['leader_commit'] > commit_idx:
        commit_idx = min(msg['leader_commit'], len(log_entry)-1)
-    last_action_time = time.time()
 
     if len(msg['entries']) != 0:
         # receive append entries rpc (not heartbeat)
@@ -245,7 +246,7 @@ def send_one_appendentry_rpc(k, entries):
         # I have sent one rpc
         return
 
-    resp = {'src':my_id, 'leader': leader_id, 'type': 'append_entry_rpc', 'leader_commit': commit_idx, 'term':current_term,}
+    resp = {'src':my_id, 'leader': my_id, 'type': 'append_entry_rpc', 'leader_commit': commit_idx, 'term':current_term,}
     pli = next_index[k] - 1
     resp['prelog_idx'] = pli
     if pli < 0:
@@ -326,11 +327,23 @@ def handle_recv(msg):
         # for candidate or follower: If it received AppendEntries RPC
         # from new leader: convert to follower of this leader
         if role != 3:
+            if leader_id == msg['leader']:
+               last_action_time=time.time()
+            else:
+               if leader_id == 'FFFF':
+                  leader_id = msg['src']
+               else: 
+                  leader_id = 'FFFF'
+            current_term = max(current_term, msg['term'])
             role = 1
             vote_received = 1
             voted = False
-            current_term = msg['term']
-            leader_id = msg['leader']
+        if role==3:
+            print("received")
+            role =1
+            vote_received =1
+            current_term = max(current_term, msg['term'])
+            leader_id='FFFF'
     
     if (msg_type == 'get' or msg_type=='put'):
        if leader_id=='FFFF' or role==2:
