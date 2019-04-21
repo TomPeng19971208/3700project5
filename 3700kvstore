@@ -59,7 +59,7 @@ def getVote():
        voted = True
        msg = {'src': my_id, 'dst': 'FFFF', 'leader': 'FFFF',
               'type': 'get_vote', 'term':current_term, 'leader': 'FFFF',
-              'lastLogIndex': len(log_entry)-1}
+              'lastLogIndex': len(log_entry)-1, 'commit_idx': commit_idx}
        sock.send(json.dumps(msg))
        #print '%s sending a get_vote to %s' % (msg['src'], msg['dst'])
        
@@ -137,7 +137,7 @@ def handle_getvote(msg):
     global voted
     global commit_idx
               
-    if not voted and msg['term'] >= current_term and leader_id=='FFFF' and msg['lastLogIndex'] >= len(log_entry)-1:
+    if not voted and msg['term'] >= current_term and leader_id=='FFFF' and msg['commit_idx'] >= commit_idx:
        print("vote----------\n"+my_id+" "+msg['src'])
        resp = {'src': my_id, 'dst': msg['src'], 'type': 'send_vote', 'leader': 'FFFF'}
        send_msg(resp)
