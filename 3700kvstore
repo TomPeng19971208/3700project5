@@ -111,9 +111,10 @@ def handle_get_put(msg):
             resp['src']=my_id
             resp['dst']=msg['src']
             resp['leader']=leader_id
+            print("get------------------", msg['key'], resp['value'], my_id)
             send_msg(resp)
         elif msg_type == 'put':
-            #print("put------------------", msg)
+            print("put------------------", msg['key'], msg['value'], my_id)
             #broad_cast_rpc(msg['key'], msg['value'], msg['src'], msg['MID'])
             # save in leader log entry
             log_entry.append({'key': msg['key'], 'value':  msg['value'], 'term': current_term,
@@ -330,10 +331,10 @@ def handle_recv(msg):
             if leader_id == msg['leader']:
                last_action_time=time.time()
             else:
-               if leader_id == 'FFFF':
-                  leader_id = msg['src']
-               else: 
+               if leader_id != 'FFFF' and role==1:
                   leader_id = 'FFFF'
+               else: 
+                  leader_id = msg['src']
             current_term = max(current_term, msg['term'])
             role = 1
             vote_received = 1
@@ -406,6 +407,7 @@ while True:
     #become a candidate after candidate timeout
     elif time_passed > candidate_timeout and role == 2:
         role = 1
+    #    getVote()
         voted = False
         vote_received = 1
         reset_timeouts()
