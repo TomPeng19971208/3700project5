@@ -111,10 +111,10 @@ def handle_get_put(msg):
             resp['src']=my_id
             resp['dst']=msg['src']
             resp['leader']=leader_id
-            print("get------------------", msg['key'], resp['value'], my_id)
+            #print("get------------------", msg['key'], resp['value'], my_id)
             send_msg(resp)
         elif msg_type == 'put':
-            print("put------------------", msg['key'], msg['value'], my_id)
+            #print("put------------------", msg['key'], msg['value'], my_id)
             #broad_cast_rpc(msg['key'], msg['value'], msg['src'], msg['MID'])
             # save in leader log entry
             log_entry.append({'key': msg['key'], 'value':  msg['value'], 'term': current_term,
@@ -331,20 +331,24 @@ def handle_recv(msg):
             if leader_id == msg['leader']:
                last_action_time=time.time()
             else:
-               if leader_id != 'FFFF' and role==1:
-                  leader_id = 'FFFF'
-               else: 
+               if msg['leader_commit']>=commit_idx: 
                   leader_id = msg['src']
-            current_term = max(current_term, msg['term'])
+            #current_term = max(current_term, msg['term'])
+            current_term = msg['term']
             role = 1
             vote_received = 1
             voted = False
         if role==3:
-            print("received")
-            role =1
-            vote_received =1
-            current_term = max(current_term, msg['term'])
-            leader_id='FFFF'
+           if msg['leader_commit']>=last_applied:
+              leader_id=msg['src']
+              print("received")
+              role =1
+              vote_received =1
+              current_term = msg['term']
+              for i in range(last_applied+1, len(log_entry)):
+                 target = log_entry[i]
+                 resp = {"src": my_id, "dst": target['client'], "leader": msg['src'], "type": "redirect", "MID": target['MID']}
+                 send_msg(resp)
     
     if (msg_type == 'get' or msg_type=='put'):
        if leader_id=='FFFF' or role==2:
@@ -356,7 +360,7 @@ def handle_recv(msg):
     elif msg_type == 'get_vote' and msg['src'] != my_id:
         handle_getvote(msg)    
     # receive apendentries rpc (include heartbeat)
-    elif msg_type == 'append_entry_rpc' and role != 3:
+    elif msg_type == 'append_entry_rpc' and role != 3 and msg['leader']==leader_id:
         handle_receive_appendentry_rpc(msg)
     #received a vote from others
     elif msg_type == 'send_vote' and role == 2:
